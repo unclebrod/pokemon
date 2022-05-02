@@ -14,7 +14,7 @@ def scrape_attackdex(
         save_csv: bool = True,
         file_path: str = 'data/attackdex.csv'
 ) -> pd.DataFrame:
-    """Return dataframe of scraped item data from serebii.net"""
+    """Return dataframe of scraped attack data from serebii.net"""
     gen_dict = {
         1: '-rby',
         2: '-gs',
@@ -87,6 +87,16 @@ def scrape_attackdex(
         pokedf.to_csv(file_path)
         logging.info(f'Saved attackdex data to {file_path}')
     return pokedf
+
+
+def scrape_itemdex(
+    save_csv: bool = True,
+    file_path: str = 'data/itemdex.csv'
+) -> pd.DataFrame:
+    """Return dataframe of scraped item data from serebii.net"""
+    url = 'https://www.serebii.net/itemdex/{category}'
+    categories = []
+    pass
 
 
 if __name__ == '__main__':
