@@ -6,7 +6,7 @@ from scrapy.loader import ItemLoader
 from scrapy.spiders import CrawlSpider, Rule, Spider
 from w3lib.html import remove_tags
 
-from scrapers.items import MoveItem, NaturesItem, PokedexItem
+from scrapers.items import EVItem, MoveItem, NaturesItem, PokedexItem
 
 EGG_GROUPS = [
     "Amorphous",
@@ -28,16 +28,20 @@ EGG_GROUPS = [
 
 
 class PokedexSpider(CrawlSpider):
+    # TODO: Consider alternatives to storing data in jsons - would db be better?
+    # TODO: https://pypi.org/project/scrapy-fake-useragent/
+    # TODO: Search for data discrepencies and clean up crawling
     name = "pokedex"
     allowed_domains = ["pokemondb.net"]
     start_urls = ["https://pokemondb.net/pokedex/all/"]
-    rules = Rule(
-        LinkExtractor(allow="pokedex", deny=["national", "game", "go", "net"]),
-        callback="parse_pokedex",
+    rules = (
+        Rule(
+            LinkExtractor(allow="pokedex", deny=["national", "game"]),
+            callback="parse_pokedex",
+        ),
     )
 
     def parse_pokedex(self, response):
-        # TODO: implement Item Pipelines - do we want to store data in jsons? or in db?
         page = response.url.split("/")[-1]
         filename = f"html/pokemondb/pokedex/{page}.html"
         with open(filename, "wb") as f:
@@ -134,8 +138,8 @@ class MovesSpider(CrawlSpider):
     name = "moves"
     allowed_domains = ["pokemondb.net"]
     start_urls = ["https://pokemondb.net/move/all"]
-    rules = Rule(
-        LinkExtractor(allow="move", deny=["mechanics"]), callback="parse_moves"
+    rules = (
+        Rule(LinkExtractor(allow="move", deny=["mechanics"]), callback="parse_moves"),
     )
 
     def parse_moves(self, response):
@@ -230,8 +234,39 @@ class NaturesSpider(Spider):
         with open(filename, "wb") as f:
             f.write(response.body)
 
-        loader = ItemLoader(item=NaturesItem(), response=response)
-        # loader.add_css("name", "h1")
-        # loader.add_css("move_target", "p.mt-descr")
+        natures_table = response.css("tbody")[1]
+        for row in natures_table.css("tr"):
+            loader = ItemLoader(item=NaturesItem(), selector=row)
+            loader.add_css("name", "td.ent-name")
+            loader.add_css("increases", "td.text-positive")
+            loader.add_css("decreases", "td.text-negative")
 
-        yield loader.load_item()
+            yield loader.load_item()
+
+
+class EVSpider(Spider):
+    name = "ev"
+    allowed_domains = ["pokemondb.net"]
+    start_urls = ["https://pokemondb.net/ev/all"]
+
+    def parse(self, response):
+        filename = f"html/pokemondb/ev/ev.html"
+        with open(filename, "wb") as f:
+            f.write(response.body)
+
+        ev_table = response.css("tbody")
+        for row in ev_table.css("tr"):
+            loader = ItemLoader(item=EVItem(), selector=row)
+            cells = row.css("td")
+            loader.add_value("img", cells[0].css("span::attr(data-src)").get())
+            loader.add_value("number", cells[0].css("span.infocard-cell-data").get())
+            loader.add_value("name", cells[1].css("a.ent-name").get())
+            loader.add_value("alt_name", cells[1].css("small.text-muted").get())
+            loader.add_value("hp", cells[2].css("td").get())
+            loader.add_value("attack", cells[3].css("td").get())
+            loader.add_value("defense", cells[4].css("td").get())
+            loader.add_value("sp_atk", cells[5].css("td").get())
+            loader.add_value("sp_def", cells[6].css("td").get())
+            loader.add_value("speed", cells[7].css("td").get())
+
+            yield loader.load_item()
