@@ -1,12 +1,15 @@
+from os import makedirs
+from os.path import exists
+from typing import Optional
 from unicodedata import normalize
 
 from bs4 import BeautifulSoup
+from scrapy.http.response.html import HtmlResponse
 from scrapy.linkextractors import LinkExtractor
 from scrapy.loader import ItemLoader
 from scrapy.spiders import CrawlSpider, Rule, Spider
-from w3lib.html import remove_tags
 
-from scrapers.items import EVItem, MoveItem, NaturesItem, PokedexItem
+from scrapers.items import *
 
 EGG_GROUPS = [
     "Amorphous",
@@ -27,9 +30,24 @@ EGG_GROUPS = [
 ]
 
 
+def write_html(
+    response: HtmlResponse,
+    subfolder: str,
+    folder: str = "pokemondb",
+    page: Optional[str] = None,
+) -> None:
+    filepath = f"html/{folder}/{subfolder}"
+    if not exists(filepath):
+        makedirs(filepath)
+    if not page:
+        page = response.url.split("/")[-1]
+    filename = f"{filepath}/{page}.html"
+    with open(filename, "wb") as f:
+        f.write(response.body)
+
+
 class PokedexSpider(CrawlSpider):
     # TODO: Consider alternatives to storing data in jsons - would db be better?
-    # TODO: https://pypi.org/project/scrapy-fake-useragent/
     # TODO: Search for data discrepencies and clean up crawling
     name = "pokedex"
     allowed_domains = ["pokemondb.net"]
@@ -42,10 +60,7 @@ class PokedexSpider(CrawlSpider):
     )
 
     def parse_pokedex(self, response):
-        page = response.url.split("/")[-1]
-        filename = f"html/pokemondb/pokedex/{page}.html"
-        with open(filename, "wb") as f:
-            f.write(response.body)
+        write_html(response=response, subfolder="pokedex")
 
         loader = ItemLoader(item=PokedexItem(), response=response)
         loader.add_css("name", "h1")
@@ -143,10 +158,7 @@ class MovesSpider(CrawlSpider):
     )
 
     def parse_moves(self, response):
-        page = response.url.split("/")[-1]
-        filename = f"html/pokemondb/move/{page}.html"
-        with open(filename, "wb") as f:
-            f.write(response.body)
+        write_html(response=response, subfolder="moves")
 
         loader = ItemLoader(item=MoveItem(), response=response)
         loader.add_css("name", "h1")
@@ -224,15 +236,80 @@ class MovesSpider(CrawlSpider):
         yield loader.load_item()
 
 
+class EggGroupSpider(CrawlSpider):
+    name = "egg-group"
+    allowed_domains = ["pokemondb.net"]
+    start_urls = ["https://pokemondb.net/egg-group/amorphous"]
+    rules = (Rule(LinkExtractor(allow="egg-group"), callback="parse_egg_groups"),)
+
+    def parse_egg_groups(self, response):
+        write_html(response=response, subfolder="egg_group")
+
+        egg_group = response.css("h1::text").get()
+        egg_group_table = response.css("tbody")
+        for row in egg_group_table.css("tr"):
+            loader = ItemLoader(item=EggGroupItem(), selector=row)
+            loader.add_value("egg_group", egg_group)
+            loader.add_css("img", "td:nth-child(1) span::attr(data-src)")
+            loader.add_css("number", "td:nth-child(1) span.infocard-cell-data")
+            loader.add_css("name", "td:nth-child(2) a.ent-name")
+            loader.add_css("alt_name", "td:nth-child(2) small.text-muted")
+            loader.add_css("type", "td:nth-child(3)")
+            loader.add_css("other_group", "td:nth-child(4)")
+
+            yield loader.load_item()
+
+
+class AbilitySpider(CrawlSpider):
+    name = "ability"
+    allowed_domains = ["pokemondb.net"]
+    start_urls = ["https://pokemondb.net/ability"]
+    rules = (
+        Rule(LinkExtractor(allow="ability", deny="pokebase"), callback="parse_ability"),
+    )
+
+    def parse_ability(self, response):
+        write_html(response=response, subfolder="ability")
+
+        loader = ItemLoader(item=AbilityItem(), response=response)
+        loader.add_css("name", "h1")
+        loader.add_css("effect", "p")
+        vitals_tables = response.css("table.vitals_table")
+
+        if len(vitals_tables) >= 1:
+            game_desc_table = vitals_tables[0]
+            game_desc_keys = [
+                remove_tags(x.encode("ascii", "ignore"))
+                for x in game_desc_table.css("th").getall()
+            ]
+            game_desc_vals = game_desc_table.css("td::text").getall()
+            loader.add_value("game_desc", dict(zip(game_desc_keys, game_desc_vals)))
+
+        if len(vitals_tables) >= 2:
+            other_languages_table = vitals_tables[1]
+            other_languages_keys = other_languages_table.css("th::text").getall()
+            other_languages_vals = other_languages_table.css("td::text").getall()
+            loader.add_value(
+                "languages", dict(zip(other_languages_keys, other_languages_vals))
+            )
+
+        data_tables = response.css("table.data-table")
+        for i, data_table in enumerate(data_tables):
+            name_str = "with_ability" if i == 0 else "hidden_ability"
+            numbers = data_table.css("tbody span.infocard-cell-data::text").getall()
+            names = data_table.css("tbody a.ent-name::text").getall()
+            loader.add_value(name_str, dict(zip(numbers, names)))
+
+        yield loader.load_item()
+
+
 class NaturesSpider(Spider):
     name = "natures"
     allowed_domains = ["pokemondb.net"]
     start_urls = ["https://pokemondb.net/mechanics/natures"]
 
     def parse(self, response):
-        filename = f"html/pokemondb/natures/natures.html"
-        with open(filename, "wb") as f:
-            f.write(response.body)
+        write_html(response=response, subfolder="natures")
 
         natures_table = response.css("tbody")[1]
         for row in natures_table.css("tr"):
@@ -250,23 +327,38 @@ class EVSpider(Spider):
     start_urls = ["https://pokemondb.net/ev/all"]
 
     def parse(self, response):
-        filename = f"html/pokemondb/ev/ev.html"
-        with open(filename, "wb") as f:
-            f.write(response.body)
+        write_html(response=response, subfolder="ev")
 
         ev_table = response.css("tbody")
         for row in ev_table.css("tr"):
             loader = ItemLoader(item=EVItem(), selector=row)
-            cells = row.css("td")
-            loader.add_value("img", cells[0].css("span::attr(data-src)").get())
-            loader.add_value("number", cells[0].css("span.infocard-cell-data").get())
-            loader.add_value("name", cells[1].css("a.ent-name").get())
-            loader.add_value("alt_name", cells[1].css("small.text-muted").get())
-            loader.add_value("hp", cells[2].css("td").get())
-            loader.add_value("attack", cells[3].css("td").get())
-            loader.add_value("defense", cells[4].css("td").get())
-            loader.add_value("sp_atk", cells[5].css("td").get())
-            loader.add_value("sp_def", cells[6].css("td").get())
-            loader.add_value("speed", cells[7].css("td").get())
+            loader.add_css("img", "td:nth-child(1) span::attr(data-src)")
+            loader.add_css("number", "td:nth-child(1) span.infocard-cell-data")
+            loader.add_css("name", "td:nth-child(2) a.ent-name")
+            loader.add_css("alt_name", "td:nth-child(2) small.text-muted")
+            loader.add_css("hp", "td:nth-child(3)")
+            loader.add_css("attack", "td:nth-child(4)")
+            loader.add_css("defense", "td:nth-child(5)")
+            loader.add_css("sp_atk", "td:nth-child(6)")
+            loader.add_css("sp_def", "td:nth-child(7)")
+            loader.add_css("speed", "td:nth-child(8)")
+
+            yield loader.load_item()
+
+
+class ItemSpider(Spider):
+    name = "item"
+    allowed_domains = ["pokemondb.net"]
+    start_urls = ["https://pokemondb.net/item/all"]
+
+    def parse(self, response):
+        write_html(response=response, subfolder="item", page="item")
+
+        for row in response.css("tbody tr"):
+            loader = ItemLoader(item=ItemItem(), selector=row)
+            loader.add_css("name", "a.ent-name")
+            loader.add_css("img", "span::attr(data-src)")
+            loader.add_css("category", "td.cell-fixed:nth-child(2)")
+            loader.add_css("effect", "td.cell-long-text")
 
             yield loader.load_item()
